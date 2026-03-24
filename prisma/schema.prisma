@@ -1,0 +1,681 @@
+// ─── Prisma Schema — Nufluma ──────────────────────────────────────────────────
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MANAGER
+  ANALYST
+  VIEWER
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum AlertType {
+  COST_PER_LEAD_SPIKE
+  CTR_DROP
+  CONVERSION_DROP
+  BUDGET_DEPLETED
+  ROAS_DROP
+  CUSTOM
+}
+
+enum IntegrationType {
+  GOOGLE_ADS
+  META_ADS
+  GOOGLE_ANALYTICS
+  CSV_IMPORT
+  API
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+  PENDING
+}
+
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+  DRAFT
+}
+
+enum ReportType {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  CUSTOM
+}
+
+enum ReportStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
+enum ReportProfile {
+  MANAGER
+  TECHNICAL
+}
+
+enum SuggestionStatus {
+  PENDING
+  ACCEPTED
+  DISCARDED
+}
+
+enum SuggestionType {
+  COPY
+  CTA
+  CREATIVE
+  ANGLE
+  BUDGET
+  TARGETING
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  IMPORT
+  INVITE
+  PERMISSION_CHANGE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  PIX
+  BOLETO
+  CREDIT_CARD
+}
+
+// ─── Users & Auth ─────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts       Account[]
+  sessions       Session[]
+  memberships    WorkspaceMember[]
+  chatSessions   ChatSession[]
+  auditLogs      AuditLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── Workspaces (Multi-tenant) ────────────────────────────────────────────────
+
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  logo        String?
+  industry    String?
+  plan        String   @default("free")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Score weight configuration (stored as JSON)
+  scoreWeights Json @default("{\"ctr\": 0.2, \"cpc\": 0.2, \"cpl\": 0.2, \"conversion\": 0.2, \"roas\": 0.2}")
+
+  members       WorkspaceMember[]
+  integrations  Integration[]
+  campaigns     Campaign[]
+  metrics       Metric[]
+  forecasts     Forecast[]
+  alerts        Alert[]
+  benchmarks    Benchmark[]
+  suggestions   Suggestion[]
+  reports       Report[]
+  chatSessions  ChatSession[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+  missions      Mission[]
+  subscriptions Subscription[]
+  payments      Payment[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        Role     @default(VIEWER)
+  invitedAt   DateTime @default(now())
+  joinedAt    DateTime?
+  invitedBy   String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  keyHash     String    @unique
+  keyPrefix   String
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+model Integration {
+  id              String            @id @default(cuid())
+  workspaceId     String
+  type            IntegrationType
+  status          IntegrationStatus @default(PENDING)
+  name            String
+  accountId       String?
+  accessTokenEnc  String?           @db.Text
+  refreshTokenEnc String?           @db.Text
+  tokenExpiresAt  DateTime?
+  metadata        Json?
+  lastSyncAt      DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@map("integrations")
+}
+
+// ─── Campaigns ────────────────────────────────────────────────────────────────
+
+model Campaign {
+  id            String         @id @default(cuid())
+  workspaceId   String
+  integrationId String?
+  name          String
+  status        CampaignStatus @default(ACTIVE)
+  channel       String
+  budget        Float?
+  startDate     DateTime?
+  endDate       DateTime?
+  externalId    String?
+  metadata      Json?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  integration Integration? @relation(fields: [integrationId], references: [id])
+  metrics     Metric[]
+  healthScores HealthScore[]
+  forecasts   Forecast[]
+  suggestions Suggestion[]
+  alerts      Alert[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, channel])
+  @@map("campaigns")
+}
+
+// ─── Metrics ──────────────────────────────────────────────────────────────────
+
+model Metric {
+  id          String   @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  date        DateTime @db.Date
+  channel     String?
+
+  // Core metrics
+  impressions   Int?
+  clicks        Int?
+  leads         Int?
+  conversions   Int?
+  spend         Float?
+  revenue       Float?
+
+  // Derived metrics (computed and stored)
+  ctr         Float?
+  cpc         Float?
+  cpl         Float?
+  cpa         Float?
+  roas        Float?
+  convRate    Float?
+
+  source    String   @default("manual")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign?  @relation(fields: [campaignId], references: [id])
+
+  @@index([workspaceId, date])
+  @@index([workspaceId, campaignId, date])
+  @@map("metrics")
+}
+
+// ─── Health Scores ────────────────────────────────────────────────────────────
+
+model HealthScore {
+  id          String   @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  score       Float
+  period      String
+  explanation String   @db.Text
+  breakdown   Json
+  weights     Json
+  createdAt   DateTime @default(now())
+
+  campaign Campaign? @relation(fields: [campaignId], references: [id])
+
+  @@index([workspaceId, campaignId])
+  @@map("health_scores")
+}
+
+// ─── Forecasts ────────────────────────────────────────────────────────────────
+
+model Forecast {
+  id          String   @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  version     Int      @default(1)
+  targetDate  DateTime @db.Date
+  metric      String
+  predicted   Float
+  lowerBound  Float
+  upperBound  Float
+  confidence  Float
+  model       String   @default("linear")
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign? @relation(fields: [campaignId], references: [id])
+
+  @@index([workspaceId, campaignId])
+  @@map("forecasts")
+}
+
+// ─── Alerts ───────────────────────────────────────────────────────────────────
+
+model Alert {
+  id           String        @id @default(cuid())
+  workspaceId  String
+  campaignId   String?
+  type         AlertType
+  severity     AlertSeverity
+  status       AlertStatus   @default(ACTIVE)
+  title        String
+  message      String        @db.Text
+  metric       String?
+  threshold    Float?
+  currentValue Float?
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt   DateTime?
+  notifiedVia  String[]
+  metadata     Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign?  @relation(fields: [campaignId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, severity])
+  @@map("alerts")
+}
+
+// ─── Alert Rules ──────────────────────────────────────────────────────────────
+
+model AlertRule {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  type        AlertType
+  metric      String
+  condition   String
+  threshold   Float
+  severity    AlertSeverity @default(MEDIUM)
+  enabled     Boolean   @default(true)
+  channels    String[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@map("alert_rules")
+}
+
+// ─── Benchmarks ───────────────────────────────────────────────────────────────
+
+model Benchmark {
+  id          String   @id @default(cuid())
+  workspaceId String
+  industry    String
+  channel     String
+  metric      String
+  period      String
+  value       Float
+  percentile  Float?
+  source      String   @default("internal")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, industry, channel])
+  @@map("benchmarks")
+}
+
+// ─── Suggestions ──────────────────────────────────────────────────────────────
+
+model Suggestion {
+  id          String           @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  type        SuggestionType
+  status      SuggestionStatus @default(PENDING)
+  title       String
+  content     String           @db.Text
+  rationale   String?          @db.Text
+  impact      String?
+  confidence  Float?
+  generatedBy String           @default("ai")
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign?  @relation(fields: [campaignId], references: [id])
+
+  @@index([workspaceId, status])
+  @@map("suggestions")
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+model Report {
+  id          String        @id @default(cuid())
+  workspaceId String
+  type        ReportType
+  profile     ReportProfile @default(MANAGER)
+  status      ReportStatus  @default(GENERATING)
+  title       String
+  periodStart DateTime      @db.Date
+  periodEnd   DateTime      @db.Date
+  content     Json?
+  pdfUrl      String?
+  generatedAt DateTime?
+  scheduledAt DateTime?
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@map("reports")
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
+
+model ChatSession {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  title       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@index([workspaceId, userId])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      String
+  content   String   @db.Text
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("chat_messages")
+}
+
+// ─── Gamification ─────────────────────────────────────────────────────────────
+
+model Mission {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String
+  description String
+  metric      String
+  target      Float
+  current     Float    @default(0)
+  reward      String?
+  completedAt DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("missions")
+}
+
+// ─── Billing ──────────────────────────────────────────────────────────────────
+
+model Subscription {
+  id                  String             @id @default(cuid())
+  workspaceId         String
+  status              SubscriptionStatus @default(TRIALING)
+  plan                String             @default("pro")
+  pagarmeCustomerId   String?
+  currentPeriodStart  DateTime?
+  currentPeriodEnd    DateTime?
+  cancelledAt         DateTime?
+  trialEndsAt         DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  payments  Payment[]
+
+  @@index([workspaceId])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  workspaceId    String
+  subscriptionId String?
+  pagarmeOrderId String?       @unique
+  amount         Int           // em centavos
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  pixQrCode      String?       @db.Text
+  pixQrCodeUrl   String?
+  pixExpiresAt   DateTime?
+  boletoLine     String?       @db.Text
+  boletoUrl      String?
+  boletoDueAt    DateTime?
+  paidAt         DateTime?
+  failedAt       DateTime?
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([pagarmeOrderId])
+  @@map("payments")
+}
+
+model PaymentEvent {
+  id        String   @id @default(cuid())
+  eventId   String   @unique  // id do evento Pagar.me
+  eventType String
+  payload   Json
+  processed Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([eventType])
+  @@map("payment_events")
+}
+
+// ─── Support Chat ─────────────────────────────────────────────────────────────
+
+enum SupportSessionStatus {
+  OPEN
+  ESCALATED
+  CLOSED
+}
+
+model SupportSession {
+  id          String               @id @default(cuid())
+  workspaceId String
+  userId      String
+  status      SupportSessionStatus @default(OPEN)
+  escalatedAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  messages SupportMessage[]
+
+  @@index([workspaceId, userId])
+  @@map("support_sessions")
+}
+
+model SupportMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      String   // "user" | "assistant"
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  session SupportSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("support_messages")
+}
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  workspaceId String?
+  userId      String?
+  action      AuditAction
+  resource    String
+  resourceId  String?
+  details     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id])
+  user      User?      @relation(fields: [userId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
