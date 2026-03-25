@@ -6,5 +6,5 @@ export default async function RootPage() {
   if (session?.user) {
     redirect("/dashboard");
   }
-  redirect("https://nufluma.com");
+  redirect("/login");
 }
